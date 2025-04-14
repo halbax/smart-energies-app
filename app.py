@@ -1,10 +1,12 @@
+# app.py - hlavní spouštěcí skript Streamlit aplikace
+
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
 from src import optimizer, pdf_generator
+import os
 
 st.set_page_config(page_title="Smart Energies - Cenová nabídka", layout="wide")
-
 st.title("Smart Energies | Optimalizace nákupu elektřiny")
 
 uploaded_file = st.file_uploader("Nahraj odběrový diagram (Excel nebo CSV)", type=["xlsx", "csv"])
@@ -29,7 +31,6 @@ with st.form("inputs"):
     submit = st.form_submit_button("Vypočítat nabídku")
 
 if uploaded_file and submit:
-    # Rozpoznání typu souboru
     if uploaded_file.name.endswith('.csv'):
         df = pd.read_csv(uploaded_file, sep=None, engine='python')
     else:
