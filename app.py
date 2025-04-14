@@ -60,5 +60,7 @@ if uploaded_file and submit:
         pdf_generator.create_pdf(client_name, result, cal_price, q_price, m_price, spot_price, marze_fix, marze_spot, spot_avg, validity)
         st.success("PDF nabídka byla vygenerována do složky outputs/")
 
-    result['summary'].to_excel(f"archive/{client_name}_nabidka.xlsx")
+    archive_dir = "archive"
+    os.makedirs(archive_dir, exist_ok=True)
+    result['summary'].to_excel(f"{archive_dir}/{client_name}_nabidka.xlsx")
     st.info("Výsledek byl uložen i do archivu.")
