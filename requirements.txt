@@ -4,3 +4,6 @@ numpy
 matplotlib
 openpyxl
 reportlab
+scikit-learn
+sqlalchemy
+plotly
