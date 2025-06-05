@@ -1,66 +1,75 @@
-# app.py - hlavní spouštěcí skript Streamlit aplikace
-
 import streamlit as st
 import pandas as pd
-import matplotlib.pyplot as plt
-from src import optimizer, pdf_generator
-import os
+import plotly.express as px
+import logging
+from io import BytesIO
+from src import lds_margin
 
-st.set_page_config(page_title="Smart Energies - Cenová nabídka", layout="wide")
-st.title("Smart Energies | Optimalizace nákupu elektřiny")
+logging.basicConfig(level=logging.INFO, filename='app.log',
+                    format='%(asctime)s - %(levelname)s - %(message)s')
 
-uploaded_file = st.file_uploader("Nahraj odběrový diagram (Excel nebo CSV)", type=["xlsx", "csv"])
+st.set_page_config(page_title="LDS Margin Calculator", layout="wide")
+st.title("Výpočet marže lokálních distribučních sítí")
 
-with st.form("inputs"):
-    st.subheader("Parametry nabídky")
-    client_name = st.text_input("Jméno klienta")
+with st.sidebar:
+    st.header("Konfigurace")
+    country = st.selectbox("Země", ["ČR", "SK"])
+    year = st.number_input("Rok výpočtu", min_value=2000, max_value=2100, value=2024)
+    lds_type = st.selectbox("Typ LDS", ["bytová", "průmyslová", "komerční", "všechny"])
 
-    col1, col2 = st.columns(2)
-    with col1:
-        cal_price = st.number_input("Cena CAL [€/MWh]", min_value=0.0)
-        q_price = st.number_input("Cena Q [€/MWh]", min_value=0.0)
-        m_price = st.number_input("Cena M [€/MWh]", min_value=0.0)
-        spot_price = st.number_input("Cena SPOT [€/MWh]", min_value=0.0)
+uploaded_file = st.file_uploader("Vstupní data (Excel nebo CSV)", type=["xlsx", "csv"])
+db_url = st.text_input("DB URL (nepovinné)")
+query = st.text_area("SQL dotaz (nepovinné)")
 
-    with col2:
-        marze_fix = st.number_input("Marže fixní produkty [€/MWh]", min_value=0.0, value=2.0)
-        marze_spot = st.number_input("Marže SPOT [€/MWh]", min_value=0.0, value=2.5)
-        spot_avg = st.number_input("Průměrná SPOT cena [€/MWh]", min_value=0.0)
-        validity = st.date_input("Platnost nabídky do")
+if st.button("Načíst a analyzovat"):
+    try:
+        if uploaded_file is not None:
+            df = lds_margin.load_data(file_path=uploaded_file)
+        elif db_url and query:
+            df = lds_margin.load_data(db_url=db_url, query=query)
+        else:
+            st.error("Není k dispozici žádný zdroj dat")
+            st.stop()
+        df = lds_margin.validate_data(df)
+        df = df[df[lds_margin.REQUIRED_COLUMNS['Year']] == year]
+        if lds_type != "všechny":
+            df = df[df[lds_margin.REQUIRED_COLUMNS['Type']] == lds_type]
+        df = lds_margin.compute_margin(df)
 
-    submit = st.form_submit_button("Vypočítat nabídku")
+        st.subheader("Výsledná tabulka")
+        st.dataframe(df)
 
-if uploaded_file and submit:
-    if uploaded_file.name.endswith('.csv'):
-        df = pd.read_csv(uploaded_file, sep=None, engine='python')
-    else:
-        df = pd.read_excel(uploaded_file)
+        avg = lds_margin.average_margin_by_type(df)
+        st.subheader("Průměrná marže podle typu")
+        st.dataframe(avg)
 
-    df.columns = [col.strip() for col in df.columns]
-    date_col = [col for col in df.columns if 'date' in col.lower() or 'čas' in col.lower()][0]
-    mwh_col = [col for col in df.columns if 'mwh' in col.lower() or 'spotřeba' in col.lower()][0]
+        fig = px.bar(df, x=lds_margin.REQUIRED_COLUMNS['LDS'], y='Margin', title='Marže podle LDS')
+        st.plotly_chart(fig, use_container_width=True)
 
-    df['datetime'] = pd.to_datetime(df[date_col])
-    df['MWh'] = df[mwh_col].astype(str).str.replace(',', '.').astype(float)
-    df = df[['datetime', 'MWh']].dropna()
-    df = df.set_index('datetime')
+        # Export
+        output = BytesIO()
+        df.to_excel(output, index=False)
+        st.download_button("Stáhnout výsledky (XLSX)", output.getvalue(), file_name="vysledky.xlsx")
+        st.download_button("Stáhnout výsledky (CSV)", df.to_csv(index=False).encode('utf-8'), file_name="vysledky.csv")
 
-    result = optimizer.optimize(df)
+        # Predikce (jednoduchá lineární regrese)
+        model = lds_margin.train_margin_prediction(df)
+        st.subheader("Predikce marže")
+        with st.form("predict"):
+            c1, c2, c3, c4 = st.columns(4)
+            with c1:
+                p_cons = st.number_input("Spotřeba [MWh]", value=0.0)
+            with c2:
+                p_purch = st.number_input("Náklady na nákup energie", value=0.0)
+            with c3:
+                p_fixed = st.number_input("Fixní provozní náklady", value=0.0)
+            with c4:
+                p_var = st.number_input("Variabilní provozní náklady", value=0.0)
+            submit = st.form_submit_button("Predikovat")
+        if submit:
+            pred = lds_margin.predict_margin(model, p_cons, p_purch, p_fixed, p_var)
+            st.info(f"Odhadovaná marže: {pred:.2f} %")
+    except Exception as e:
+        st.error(f"Chyba při zpracování dat: {e}")
+        logging.exception("Processing failed")
 
-    st.success("Optimalizace dokončena")
-    st.dataframe(result['summary'])
-
-    fig, ax = plt.subplots(figsize=(12, 4))
-    df['MWh'].plot(ax=ax, label="Spotřeba")
-    plt.title("Pokrytí odběru")
-    plt.legend()
-    st.pyplot(fig)
-
-    if st.button("Generovat PDF nabídku"):
-        pdf_generator.create_pdf(client_name, result, cal_price, q_price, m_price, spot_price, marze_fix, marze_spot, spot_avg, validity)
-        st.success("PDF nabídka byla vygenerována do složky outputs/")
-
-    archive_dir = "archive"
-    os.makedirs(archive_dir, exist_ok=True)
-    result['summary'].to_excel(f"{archive_dir}/{client_name}_nabidka.xlsx")
-    st.info("Výsledek byl uložen i do archivu.")
