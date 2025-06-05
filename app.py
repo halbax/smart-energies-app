@@ -5,6 +5,12 @@ import logging
 from io import BytesIO
 from src import lds_margin
 
+# Session state for manual data entry
+if 'manual_data' not in st.session_state:
+    st.session_state['manual_data'] = pd.DataFrame(
+        columns=lds_margin.REQUIRED_COLUMNS.values()
+    )
+
 logging.basicConfig(level=logging.INFO, filename='app.log',
                     format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -16,14 +22,61 @@ with st.sidebar:
     country = st.selectbox("Země", ["ČR", "SK"])
     year = st.number_input("Rok výpočtu", min_value=2000, max_value=2100, value=2024)
     lds_type = st.selectbox("Typ LDS", ["bytová", "průmyslová", "komerční", "všechny"])
+    input_method = st.selectbox(
+        "Způsob zadání dat", ["Soubor/DB", "Ruční zadání"], index=0
+    )
 
-uploaded_file = st.file_uploader("Vstupní data (Excel nebo CSV)", type=["xlsx", "csv"])
+uploaded_file = st.file_uploader(
+    "Vstupní data (Excel nebo CSV)", type=["xlsx", "csv"]
+)
 db_url = st.text_input("DB URL (nepovinné)")
 query = st.text_area("SQL dotaz (nepovinné)")
 
+if input_method == "Ruční zadání":
+    st.subheader("Ruční zadání dat")
+    with st.form("manual_data_form"):
+        name = st.text_input("Název LDS")
+        m_year = st.number_input(
+            "Rok", min_value=2000, max_value=2100, value=int(year), key="year_manual"
+        )
+        type_row = st.selectbox(
+            "Typ LDS (řádek)", ["bytová", "průmyslová", "komerční"], key="type_manual"
+        )
+        consumption = st.number_input("Celková spotřeba (MWh)", value=0.0)
+        purchase = st.number_input("Náklady na nákup energie", value=0.0)
+        revenue = st.number_input("Výnosy z prodeje energie", value=0.0)
+        op_fixed = st.number_input("Náklady na provoz LDS (fixní)", value=0.0)
+        op_variable = st.number_input("Náklady na provoz LDS (variabilní)", value=0.0)
+        add_row = st.form_submit_button("Přidat řádek")
+    if add_row:
+        new_row = {
+            lds_margin.REQUIRED_COLUMNS['LDS']: name,
+            lds_margin.REQUIRED_COLUMNS['Consumption']: consumption,
+            lds_margin.REQUIRED_COLUMNS['PurchaseCost']: purchase,
+            lds_margin.REQUIRED_COLUMNS['Revenue']: revenue,
+            lds_margin.REQUIRED_COLUMNS['OpCostFixed']: op_fixed,
+            lds_margin.REQUIRED_COLUMNS['OpCostVariable']: op_variable,
+            lds_margin.REQUIRED_COLUMNS['Type']: type_row,
+            lds_margin.REQUIRED_COLUMNS['Year']: m_year,
+        }
+        st.session_state['manual_data'] = pd.concat(
+            [st.session_state['manual_data'], pd.DataFrame([new_row])],
+            ignore_index=True,
+        )
+
+    if not st.session_state['manual_data'].empty:
+        st.dataframe(st.session_state['manual_data'])
+        if st.button("Vymazat zadaná data"):
+            st.session_state['manual_data'] = st.session_state['manual_data'][0:0]
+
 if st.button("Načíst a analyzovat"):
     try:
-        if uploaded_file is not None:
+        if input_method == "Ruční zadání":
+            if st.session_state['manual_data'].empty:
+                st.error("Nejsou zadaná žádná data")
+                st.stop()
+            df = st.session_state['manual_data']
+        elif uploaded_file is not None:
             df = lds_margin.load_data(file_path=uploaded_file)
         elif db_url and query:
             df = lds_margin.load_data(db_url=db_url, query=query)
